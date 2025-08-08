@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/genai";
+import GoogleGenerativeAI from "@google/genai";
 
 export async function handler(event) {
     // Only allow POST requests
