@@ -280,11 +280,13 @@
                 }
                 const data = await response.json();
                
-                // Clean the response by removing markdown formatting
-                const cleanedText = data.text.replace(/^```json\n|```$/g, '');
-                
-                // The text from Gemini is expected to be a JSON string.
-                const aiResponse = JSON.parse(cleanedText);
+               // Find and extract the JSON block from the response, even if there's text before or after it.
+                const match = data.text.match(/```json\n([\s\S]*?)\n```/);
+                if (!match) {
+                    throw new Error("Could not find a valid JSON block in the AI's response.");
+                }
+                const jsonString = match[1];
+                const aiResponse = JSON.parse(jsonString);
 
                 // 4. Process the response and update the game
                 updateState(aiResponse.stateChanges);
