@@ -141,11 +141,8 @@
                     jackals: 0,
                 },
             },
-            storyFlags: {
-                labDestroyed: false,
-                hasEscaped: false,
-            },
-            inventory: [], // Start with an empty inventory
+            storyFlags: {},
+            inventory: [],
         };
 
         // --- CORE GAME SYSTEMS ---
@@ -194,11 +191,10 @@
                 if (savedState) {
                     gameState = JSON.parse(savedState);
                     if(!isAuto) alert('Game Loaded.');
-                    // Instead of calling renderScene, just re-display the last known state
-                    // This assumes you save the last narrative text and choices in gameState
-                    // For simplicity, we'll just show the location and let the player continue
-                    renderNarrative(`Game loaded. You are at: ${gameState.location}. What do you do?`);
-                    renderChoices([{text: "Continue...", action: "Look around"}]);
+                    
+                    const locationName = formatLocationName(gameState.location);
+                    renderNarrative(`Game loaded. You are at: ${locationName}. What do you do?`);
+                    renderChoices([{text: "Look around.", action: "Look around"}]);
 
                 } else {
                     if(!isAuto) alert('No saved game found.');
@@ -215,6 +211,15 @@
                 localStorage.removeItem('greenFugitiveSave');
                 initializeGame();
             }
+        }
+        
+        // --- HELPER FUNCTIONS ---
+        function formatLocationName(locationId) {
+            if (!locationId) return "an unknown location";
+            return locationId
+                .split('_')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+                .join(' ');
         }
 
         // --- GEMINI API INTERACTION ---
@@ -236,14 +241,16 @@
             
             if (match && match[1]) {
                 return JSON.parse(match[1]);
-            } else {
-                const firstBrace = jsonString.indexOf('{');
-                const lastBrace = jsonString.lastIndexOf('}');
-                if (firstBrace !== -1 && lastBrace !== -1) {
-                    const potentialJson = jsonString.substring(firstBrace, lastBrace + 1);
-                    return JSON.parse(potentialJson);
-                }
             }
+            
+            // Fallback for non-markdown responses
+            const firstBrace = jsonString.indexOf('{');
+            const lastBrace = jsonString.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace !== -1) {
+                const potentialJson = jsonString.substring(firstBrace, lastBrace + 1);
+                return JSON.parse(potentialJson);
+            }
+
             throw new Error("Could not find a valid JSON block in the AI's response.");
         }
 
@@ -254,11 +261,11 @@
                 ---
                 Game State Context:
                 Character: ${gameState.character.age}-year-old ${gameState.character.gender}.
-                Location Details: Currently at ${gameState.location}.
-                Hidden Menaces: Despair is at ${gameState.menaces.despair}/100. Paranoia is at ${gameState.menaces.paranoia}/100. Exposure is at ${gameState.menaces.exposure}/100.
+                Location: ${formatLocationName(gameState.location)}.
+                Hidden Menaces: Despair ${gameState.menaces.despair}/100, Paranoia ${gameState.menaces.paranoia}/100, Exposure ${gameState.menaces.exposure}/100.
                 World State: The Authority's 'Heat' level is ${gameState.worldState.heat}/100.
                 Inventory: ${gameState.inventory.join(', ') || 'empty'}.
-                Key Flags: ${JSON.stringify(gameState.storyFlags)}.
+                Story Flags: ${JSON.stringify(gameState.storyFlags)}.
                 ---
             `;
             
@@ -267,9 +274,9 @@
             if (despair > 50 && despair >= paranoia && despair >= exposure) {
                 persona = "You are a narrator colored by despair. Your prose is bleak, fatalistic, and focuses on decay and hopelessness.";
             } else if (paranoia > 50 && paranoia >= despair && paranoia >= exposure) {
-                persona = "You are a narrator instilled with paranoia. Your prose is agitated, suspicious, focusing on shadows, potential threats, and untrustworthy details.";
+                persona = "You are a narrator instilled with paranoia. Your prose is agitated, suspicious, focusing on shadows and potential threats.";
             } else if (exposure > 50) {
-                persona = "You are a narrator suffering from exposure. Your prose is fragmented, hazy, and focused on physical weakness and delirium.";
+                persona = "You are a narrator suffering from exposure. Your prose is fragmented, hazy, and focused on physical weakness.";
             }
 
             let fullPrompt;
@@ -277,17 +284,17 @@
                 const startLocation = startLocations[Math.floor(Math.random() * startLocations.length)];
                 updateState({ location: startLocation.id });
                 fullPrompt = `
-                    Persona: You are a terse, action-focused narrator for a survival horror game. Get straight to the point. No poetic language.
-                    Task: Write a 2-3 sentence opening scene that throws the player directly into a choice. The player's lab is being raided by soldiers from 'The Authority'. Present a clear, immediate choice.
+                    Persona: You are a terse, action-focused narrator for a survival horror game. Get straight to the point.
+                    Task: Write a 2-3 sentence opening scene that throws the player directly into a choice. The player's lab is being raided by soldiers from 'The Authority'. Present a clear, immediate choice between two items.
                     Context: The lab is a ${startLocation.text}. The player is a ${gameState.character.age}-year-old scientist. They hear soldiers' boots and shouting getting closer. On a desk in front of them are their 'encrypted research notes' and a 'survival go-bag'. They can only grab one before running.
-                    Format: Respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices". The choices should be to grab the notes or the bag.
+                    Format: Respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices". The "choices" array MUST contain two distinct objects, each with "text" and "action" keys. One choice must be to grab the notes, the other to grab the bag.
                     ${contextPacket}
                 `;
             } else {
                 fullPrompt = `
                     Persona: ${persona}
-                    Task: The player has chosen to '${action}'. Narrate the outcome. Be descriptive and engaging. Then, suggest changes to the game state and two new, distinct choices for the player to make next.
-                    Format: Respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices".
+                    Task: The player has chosen to '${action}'. Narrate the outcome. Then, present two new, distinct, and actionable choices for the player to make next.
+                    Format: Respond with a single, minified JSON object with three keys: "narrativeText" (a string with the story), "stateChanges" (an object with state updates), and "choices" (an array of two distinct choice objects, each with "text" and "action" keys). DO NOT provide a "Continue..." choice.
                     ${contextPacket}
                 `;
             }
@@ -346,9 +353,9 @@
 
         // --- GAME INITIALIZATION ---
         const startLocations = [
-            { id: 'university_greenhouse', text: "university greenhouse" },
-            { id: 'aquifer_bunker', text: "deep underground bunker" },
-            { id: 'coastal_rig', text: "repurposed offshore rig" }
+            { id: 'UNIVERSITY_GREENHOUSE', text: "university greenhouse" },
+            { id: 'AQUIFER_BUNKER', text: "deep underground bunker" },
+            { id: 'COASTAL_RIG', text: "repurposed offshore rig" }
         ];
 
         function initializeGame() {
