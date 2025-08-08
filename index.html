@@ -301,9 +301,17 @@
             
             try {
                 const aiResponse = await getAiResponse(fullPrompt);
+
+                // Add a check to ensure the response is valid
+                if (!aiResponse || !aiResponse.narrativeText || !aiResponse.choices) {
+                    console.error("Invalid AI Response:", aiResponse);
+                    throw new Error("AI response was missing required fields (narrativeText or choices).");
+                }
+
                 updateState(aiResponse.stateChanges);
                 renderNarrative(aiResponse.narrativeText);
                 renderChoices(aiResponse.choices);
+
             } catch (error) {
                 console.error("Error handling player action:", error);
                 renderNarrative("A chilling sense of uncertainty grips you, as if the world itself is refusing to respond. (Error communicating with the game server. Check console for details.)");
