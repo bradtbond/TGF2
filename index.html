@@ -135,7 +135,7 @@
                 exposure: 0,
             },
             worldState: {
-                heat: 5, // The Authority's hunt is just beginning
+                heat: 5,
                 factionReputation: {
                     freeTowns: 0,
                     jackals: 0,
@@ -145,21 +145,25 @@
                 labDestroyed: false,
                 hasEscaped: false,
             },
-            inventory: ["Research Notes (Encrypted)"],
+            inventory: [], // Start with an empty inventory
         };
 
         // --- CORE GAME SYSTEMS ---
-
         function updateState(changes) {
             if (!changes) return;
 
             Object.keys(changes).forEach(key => {
-                if (key in gameState) {
-                    if (typeof gameState[key] === 'object' && gameState[key] !== null) {
-                        Object.assign(gameState[key], changes[key]);
-                    } else {
-                        gameState[key] = changes[key];
+                if (key === 'inventory' && typeof changes[key] === 'object') {
+                    if (changes[key].addItem && !gameState.inventory.includes(changes[key].addItem)) {
+                        gameState.inventory.push(changes[key].addItem);
                     }
+                    if (changes[key].removeItem) {
+                        gameState.inventory = gameState.inventory.filter(item => item !== changes[key].removeItem);
+                    }
+                } else if (typeof gameState[key] === 'object' && gameState[key] !== null && !Array.isArray(gameState[key])) {
+                    Object.assign(gameState[key], changes[key]);
+                } else {
+                    gameState[key] = changes[key];
                 }
             });
             autoSaveGame();
@@ -190,7 +194,12 @@
                 if (savedState) {
                     gameState = JSON.parse(savedState);
                     if(!isAuto) alert('Game Loaded.');
-                    renderScene();
+                    // Instead of calling renderScene, just re-display the last known state
+                    // This assumes you save the last narrative text and choices in gameState
+                    // For simplicity, we'll just show the location and let the player continue
+                    renderNarrative(`Game loaded. You are at: ${gameState.location}. What do you do?`);
+                    renderChoices([{text: "Continue...", action: "Look around"}]);
+
                 } else {
                     if(!isAuto) alert('No saved game found.');
                 }
@@ -208,27 +217,37 @@
             }
         }
 
-        // --- NARRATIVE AND WORLD DATA ---
-        const storyData = {
-            'START': {
-                isAIDriven: true,
-                prompt: (startLocationText) => `
-                    Persona: You are a terse, action-focused narrator for a survival horror game. Get straight to the point. No poetic language.
-                    Task: Write a 2-3 sentence opening scene that throws the player directly into a choice. The player's lab is being raided by soldiers.
-                    Context: The lab is in a ${startLocationText}. The player is a ${gameState.character.age}-year-old scientist. They hear soldiers' boots and shouting getting closer. They have two things in front of them: their encrypted research notes and a "go-bag" with survival supplies. They can only grab one.
-                    Format: A short paragraph ending with a clear, immediate choice.
-                `
-            },
-        };
-        
-        const startLocations = [
-            { id: 'UNIVERSITY_GREENHOUSE', text: "university greenhouse. The only exits are a service door and a large glass window." },
-            { id: 'AQUIFER_BUNKER', text: "deep underground bunker. The only exits are the main elevator and a narrow ventilation shaft." },
-            { id: 'COASTAL_RIG', text: "repurposed offshore rig. The only exits are the main gangway to a docked patrol boat and a small emergency zodiac." }
-        ];
-
         // --- GEMINI API INTERACTION ---
-        async function processPlayerAction(actionPrompt) {
+        async function getAiResponse(prompt) {
+            const response = await fetch('/.netlify/functions/gemini-proxy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error("Serverless proxy error:", errorText);
+                throw new Error(`Game server error: ${response.statusText}`);
+            }
+
+            const jsonString = await response.text();
+            const match = jsonString.match(/```json\n([\s\S]*?)\n```/);
+            
+            if (match && match[1]) {
+                return JSON.parse(match[1]);
+            } else {
+                const firstBrace = jsonString.indexOf('{');
+                const lastBrace = jsonString.lastIndexOf('}');
+                if (firstBrace !== -1 && lastBrace !== -1) {
+                    const potentialJson = jsonString.substring(firstBrace, lastBrace + 1);
+                    return JSON.parse(potentialJson);
+                }
+            }
+            throw new Error("Could not find a valid JSON block in the AI's response.");
+        }
+
+        async function handlePlayerAction(action) {
             toggleLoading(true);
 
             const contextPacket = `
@@ -238,7 +257,7 @@
                 Location Details: Currently at ${gameState.location}.
                 Hidden Menaces: Despair is at ${gameState.menaces.despair}/100. Paranoia is at ${gameState.menaces.paranoia}/100. Exposure is at ${gameState.menaces.exposure}/100.
                 World State: The Authority's 'Heat' level is ${gameState.worldState.heat}/100.
-                Inventory: ${gameState.inventory.join(', ')}.
+                Inventory: ${gameState.inventory.join(', ') || 'empty'}.
                 Key Flags: ${JSON.stringify(gameState.storyFlags)}.
                 ---
             `;
@@ -253,89 +272,35 @@
                 persona = "You are a narrator suffering from exposure. Your prose is fragmented, hazy, and focused on physical weakness and delirium.";
             }
 
-            const fullPrompt = `
-                Persona: ${persona}
-                Task: The player has chosen to '${actionPrompt}'. Narrate the outcome. Be descriptive and engaging. Then, suggest changes to the game state and two new, distinct choices for the player to make next.
-                Format: Respond with a single, minified JSON object with three keys: "narrativeText" (a string with the story), "stateChanges" (an object with state updates), and "choices" (an array of two objects, each with "text" and "action" keys).
-                ${contextPacket}
-            `;
+            let fullPrompt;
+            if (action === 'INITIALIZE_GAME') {
+                const startLocation = startLocations[Math.floor(Math.random() * startLocations.length)];
+                updateState({ location: startLocation.id });
+                fullPrompt = `
+                    Persona: You are a terse, action-focused narrator for a survival horror game. Get straight to the point. No poetic language.
+                    Task: Write a 2-3 sentence opening scene that throws the player directly into a choice. The player's lab is being raided by soldiers from 'The Authority'. Present a clear, immediate choice.
+                    Context: The lab is a ${startLocation.text}. The player is a ${gameState.character.age}-year-old scientist. They hear soldiers' boots and shouting getting closer. On a desk in front of them are their 'encrypted research notes' and a 'survival go-bag'. They can only grab one before running.
+                    Format: Respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices". The choices should be to grab the notes or the bag.
+                    ${contextPacket}
+                `;
+            } else {
+                fullPrompt = `
+                    Persona: ${persona}
+                    Task: The player has chosen to '${action}'. Narrate the outcome. Be descriptive and engaging. Then, suggest changes to the game state and two new, distinct choices for the player to make next.
+                    Format: Respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices".
+                    ${contextPacket}
+                `;
+            }
             
             try {
-                const response = await fetch('/.netlify/functions/gemini-proxy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: fullPrompt })
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error("Serverless proxy error:", errorText);
-                    throw new Error(`Game server error: ${response.statusText}`);
-                }
-                
-                const jsonString = await response.text();
-                const match = jsonString.match(/```json\n([\s\S]*?)\n```/);
-                let parsableString = jsonString;
-
-                if (match && match[1]) {
-                    parsableString = match[1];
-                } else {
-                    // Fallback for when no markdown block is present
-                    const firstBrace = jsonString.indexOf('{');
-                    const lastBrace = jsonString.lastIndexOf('}');
-                    if (firstBrace !== -1 && lastBrace !== -1) {
-                        parsableString = jsonString.substring(firstBrace, lastBrace + 1);
-                    }
-                }
-
-                const aiResponse = JSON.parse(parsableString);
-
+                const aiResponse = await getAiResponse(fullPrompt);
                 updateState(aiResponse.stateChanges);
                 renderNarrative(aiResponse.narrativeText);
                 renderChoices(aiResponse.choices);
-
             } catch (error) {
-                console.error("Error communicating with Gemini:", error);
+                console.error("Error handling player action:", error);
                 renderNarrative("A chilling sense of uncertainty grips you, as if the world itself is refusing to respond. (Error communicating with the game server. Check console for details.)");
                 renderChoices([]);
-            } finally {
-                toggleLoading(false);
-            }
-        }
-        
-        async function triggerInitialScene(startLocation) {
-            toggleLoading(true);
-            const initialPrompt = storyData['START'].prompt(startLocation.text);
-            
-             try {
-                // This is the same logic as processPlayerAction, but tailored for the opening scene
-                const response = await fetch('/.netlify/functions/gemini-proxy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: initialPrompt })
-                });
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error("Serverless proxy error:", errorText);
-                    throw new Error(`Game server error: ${response.statusText}`);
-                }
-                const jsonString = await response.text();
-
-                // Initial scenes might not be JSON, they could be plain text. Let's just render the text.
-                // A more robust system would have the AI return JSON for the initial choices too.
-                renderNarrative(jsonString);
-                
-                // For a faster start, we hard-code the first choice.
-                renderChoices([
-                    { text: "Grab the research notes.", action: "Grab the research notes and run." },
-                    { text: "Grab the survival go-bag.", action: "Grab the survival go-bag and run." }
-                ]);
-
-                updateState({ location: startLocation.id, storyFlags: { labDestroyed: true } });
-
-            } catch (error) {
-                console.error("Error generating initial scene:", error);
-                renderNarrative("The world feels fuzzy, indistinct. Your memory of the escape is a blur. (Error generating initial scene.)");
             } finally {
                 toggleLoading(false);
             }
@@ -353,7 +318,6 @@
                 if (i < text.length) {
                     storyTextElement.innerHTML += text.charAt(i);
                     i++;
-                    // Speed up the text rendering
                     setTimeout(typeWriter, 15);
                 }
             }
@@ -369,32 +333,29 @@
                 button.className = 'choice-button';
                 button.textContent = choice.text;
                 button.onclick = () => {
-                    processPlayerAction(choice.action);
+                    handlePlayerAction(choice.action);
                 };
                 choicesElement.appendChild(button);
-});
+            });
         }
         
-        function renderScene() {
-            // This function is mainly for non-AI driven scenes, which we don't have yet.
-            // The logic is primarily handled by processPlayerAction and triggerInitialScene now.
-        }
-
         function toggleLoading(isLoading) {
             loadingIndicator.style.display = isLoading ? 'block' : 'none';
             choicesElement.style.display = isLoading ? 'none' : 'flex';
         }
 
         // --- GAME INITIALIZATION ---
+        const startLocations = [
+            { id: 'university_greenhouse', text: "university greenhouse" },
+            { id: 'aquifer_bunker', text: "deep underground bunker" },
+            { id: 'coastal_rig', text: "repurposed offshore rig" }
+        ];
+
         function initializeGame() {
             Object.assign(gameState, JSON.parse(JSON.stringify(initialGameState)));
-
             gameState.character.gender = Math.random() < 0.5 ? 'man' : 'woman';
             gameState.character.age = Math.floor(Math.random() * (75 - 35 + 1)) + 35;
-
-            const startLocation = startLocations[Math.floor(Math.random() * startLocations.length)];
-            
-            triggerInitialScene(startLocation);
+            handlePlayerAction('INITIALIZE_GAME');
         }
 
         // --- EVENT LISTENERS ---
