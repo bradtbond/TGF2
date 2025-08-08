@@ -279,9 +279,12 @@
                     throw new Error(`Serverless proxy error: ${response.statusText}`);
                 }
                 const data = await response.json();
+               
+                // Clean the response by removing markdown formatting
+                const cleanedText = data.text.replace(/^```json\n|```$/g, '');
                 
                 // The text from Gemini is expected to be a JSON string.
-                const aiResponse = JSON.parse(data.text);
+                const aiResponse = JSON.parse(cleanedText);
 
                 // 4. Process the response and update the game
                 updateState(aiResponse.stateChanges);
