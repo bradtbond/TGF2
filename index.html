@@ -243,7 +243,6 @@
                 return JSON.parse(match[1]);
             }
             
-            // Fallback for non-markdown responses
             const firstBrace = jsonString.indexOf('{');
             const lastBrace = jsonString.lastIndexOf('}');
             if (firstBrace !== -1 && lastBrace !== -1) {
@@ -284,17 +283,19 @@
                 const startLocation = startLocations[Math.floor(Math.random() * startLocations.length)];
                 updateState({ location: startLocation.id });
                 fullPrompt = `
-                    Persona: You are a terse, action-focused narrator for a survival horror game. Get straight to the point.
+                    Persona: You are a terse, action-focused narrator for a survival horror game.
                     Task: Write a 2-3 sentence opening scene that throws the player directly into a choice. The player's lab is being raided by soldiers from 'The Authority'. Present a clear, immediate choice between two items.
-                    Context: The lab is a ${startLocation.text}. The player is a ${gameState.character.age}-year-old scientist. They hear soldiers' boots and shouting getting closer. On a desk in front of them are their 'encrypted research notes' and a 'survival go-bag'. They can only grab one before running.
-                    Format: Respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices". The "choices" array MUST contain two distinct objects, each with "text" and "action" keys. One choice must be to grab the notes, the other to grab the bag.
+                    Context: The lab is a ${startLocation.text}. The player is a ${gameState.character.age}-year-old scientist. On a desk in front of them are their 'encrypted research notes' and a 'survival go-bag'.
+                    Format: YOU MUST respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices".
+                    Example Response:
+                    {"narrativeText":"The heavy thud of combat boots echoes from the hallway, getting closer. Shouts. The door to your lab splinters. On the desk, your life's work on a datapad sits next to a hastily packed survival bag. There's only time to grab one.","stateChanges":{"storyFlags":{"labIsBreached":true}},"choices":[{"text":"Grab the research notes.","action":"Take the research notes"},{"text":"Grab the survival go-bag.","action":"Take the survival go-bag"}]}
                     ${contextPacket}
                 `;
             } else {
                 fullPrompt = `
                     Persona: ${persona}
                     Task: The player has chosen to '${action}'. Narrate the outcome. Then, present two new, distinct, and actionable choices for the player to make next.
-                    Format: Respond with a single, minified JSON object with three keys: "narrativeText" (a string with the story), "stateChanges" (an object with state updates), and "choices" (an array of two distinct choice objects, each with "text" and "action" keys). DO NOT provide a "Continue..." choice.
+                    Format: YOU MUST respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices". DO NOT provide a "Continue..." choice.
                     ${contextPacket}
                 `;
             }
@@ -302,7 +303,6 @@
             try {
                 const aiResponse = await getAiResponse(fullPrompt);
 
-                // Add a check to ensure the response is valid
                 if (!aiResponse || !aiResponse.narrativeText || !aiResponse.choices) {
                     console.error("Invalid AI Response:", aiResponse);
                     throw new Error("AI response was missing required fields (narrativeText or choices).");
