@@ -1,6 +1,3 @@
-// --- start of corrected gemini-proxy.js code ---
-const { GoogleGenerativeAI } = require("@google/genai");
-
 exports.handler = async function(event) {
     // Only allow POST requests
     if (event.httpMethod !== 'POST') {
@@ -8,6 +5,9 @@ exports.handler = async function(event) {
     }
 
     try {
+        // Dynamically import the ES Module
+        const { GoogleGenerativeAI } = await import('@google/genai');
+
         // The API key is accessed from Netlify's environment variables
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const { prompt } = JSON.parse(event.body);
@@ -34,4 +34,3 @@ exports.handler = async function(event) {
         };
     }
 }
-// --- end of corrected gemini-proxy.js code ---
