@@ -221,6 +221,23 @@
                 .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
                 .join(' ');
         }
+        
+        // --- ROBUST JSON PARSING ---
+        function parseJsonResponse(jsonString) {
+            const match = jsonString.match(/```json\n([\s\S]*?)\n```/);
+            if (match && match[1]) {
+                return JSON.parse(match[1]);
+            }
+            
+            const firstBrace = jsonString.indexOf('{');
+            const lastBrace = jsonString.lastIndexOf('}');
+            if (firstBrace !== -1 && lastBrace !== -1) {
+                const potentialJson = jsonString.substring(firstBrace, lastBrace + 1);
+                return JSON.parse(potentialJson);
+            }
+
+            throw new Error("Could not find a valid JSON block in the AI's response.");
+        }
 
         // --- GEMINI API INTERACTION ---
         async function getAiResponse(prompt) {
@@ -236,21 +253,8 @@
                 throw new Error(`Game server error: ${response.statusText}`);
             }
 
-            const jsonString = await response.text();
-            const match = jsonString.match(/```json\n([\s\S]*?)\n```/);
-            
-            if (match && match[1]) {
-                return JSON.parse(match[1]);
-            }
-            
-            const firstBrace = jsonString.indexOf('{');
-            const lastBrace = jsonString.lastIndexOf('}');
-            if (firstBrace !== -1 && lastBrace !== -1) {
-                const potentialJson = jsonString.substring(firstBrace, lastBrace + 1);
-                return JSON.parse(potentialJson);
-            }
-
-            throw new Error("Could not find a valid JSON block in the AI's response.");
+            const data = await response.json();
+            return data.text; // Return the raw text from the proxy
         }
 
         async function handlePlayerAction(action) {
@@ -261,55 +265,53 @@
                 Game State Context:
                 Character: ${gameState.character.age}-year-old ${gameState.character.gender}.
                 Location: ${formatLocationName(gameState.location)}.
-                Hidden Menaces: Despair ${gameState.menaces.despair}/100, Paranoia ${gameState.menaces.paranoia}/100, Exposure ${gameState.menaces.exposure}/100.
-                World State: The Authority's 'Heat' level is ${gameState.worldState.heat}/100.
                 Inventory: ${gameState.inventory.join(', ') || 'empty'}.
-                Story Flags: ${JSON.stringify(gameState.storyFlags)}.
                 ---
             `;
             
-            let persona = "You are a tense, literary narrator for a survival horror game. Your style is evocative and grounded.";
-            const { despair, paranoia, exposure } = gameState.menaces;
-            if (despair > 50 && despair >= paranoia && despair >= exposure) {
-                persona = "You are a narrator colored by despair. Your prose is bleak, fatalistic, and focuses on decay and hopelessness.";
-            } else if (paranoia > 50 && paranoia >= despair && paranoia >= exposure) {
-                persona = "You are a narrator instilled with paranoia. Your prose is agitated, suspicious, focusing on shadows, potential threats.";
-            } else if (exposure > 50) {
-                persona = "You are a narrator suffering from exposure. Your prose is fragmented, hazy, and focused on physical weakness.";
-            }
-
-            let fullPrompt;
-            if (action === 'INITIALIZE_GAME') {
-                const startLocation = startLocations[Math.floor(Math.random() * startLocations.length)];
-                updateState({ location: startLocation.id });
-                fullPrompt = `
-                    Persona: You are a terse, action-focused narrator for a survival horror game.
-                    Task: Write a 2-3 sentence opening scene that throws the player directly into a choice. The player's lab is being raided by soldiers from 'The Authority'. Present a clear, immediate choice between two items.
-                    Context: The lab is a ${startLocation.text}. The player is a ${gameState.character.age}-year-old scientist. On a desk in front of them are their 'encrypted research notes' and a 'survival go-bag'.
-                    Format: YOU MUST respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices".
-                    Example Response:
-                    {"narrativeText":"The heavy thud of combat boots echoes from the hallway, getting closer. Shouts. The door to your lab splinters. On the desk, your life's work on a datapad sits next to a hastily packed survival bag. There's only time to grab one.","stateChanges":{"storyFlags":{"labIsBreached":true}},"choices":[{"text":"Grab the research notes.","action":"Take the research notes"},{"text":"Grab the survival go-bag.","action":"Take the survival go-bag"}]}
-                    ${contextPacket}
-                `;
-            } else {
-                fullPrompt = `
-                    Persona: ${persona}
-                    Task: The player has chosen to '${action}'. Narrate the outcome. Then, present two new, distinct, and actionable choices for the player to make next.
-                    Format: YOU MUST respond with a single, minified JSON object with three keys: "narrativeText", "stateChanges", and "choices". DO NOT provide a "Continue..." choice.
-                    ${contextPacket}
-                `;
-            }
-            
             try {
-                const aiResponse = await getAiResponse(fullPrompt);
+                // --- API CALL 1: Get the narrative text ---
+                let narrativePrompt;
+                if (action === 'INITIALIZE_GAME') {
+                    const startLocation = startLocations[Math.floor(Math.random() * startLocations.length)];
+                    updateState({ location: startLocation.id });
+                    narrativePrompt = `
+                        Persona: You are a terse, action-focused narrator for a survival horror game.
+                        Task: Write a 2-3 sentence opening scene that throws the player directly into a choice. The player's lab is being raided by soldiers from 'The Authority'.
+                        Context: The lab is a ${startLocation.text}. The player is a ${gameState.character.age}-year-old scientist. They hear soldiers' boots and shouting getting closer. On a desk in front of them are their 'encrypted research notes' and a 'survival go-bag'. There's only time to grab one.
+                        Format: Plain text only.
+                    `;
+                } else {
+                    narrativePrompt = `
+                        Persona: You are a tense, literary narrator.
+                        Task: Narrate the outcome of the player's action.
+                        Context: The player chose to '${action}'.
+                        ${contextPacket}
+                        Format: Plain text only.
+                    `;
+                }
 
-                if (!aiResponse || !aiResponse.narrativeText || !aiResponse.choices) {
-                    console.error("Invalid AI Response:", aiResponse);
-                    throw new Error("AI response was missing required fields (narrativeText or choices).");
+                const narrativeText = await getAiResponse(narrativePrompt);
+                renderNarrative(narrativeText);
+                
+                // --- API CALL 2: Get the state changes and choices ---
+                const choicesPrompt = `
+                    Persona: You are a game logic AI.
+                    Task: Based on the following narrative text, determine the consequences and what the player can do next.
+                    Narrative context: "${narrativeText}"
+                    ${contextPacket}
+                    Format: YOU MUST respond with a single, minified JSON object with two keys: "stateChanges" (an object with updates to location, menaces, heat, inventory, etc.) and "choices" (an array of two distinct choice objects, each with "text" and "action" keys). DO NOT provide a "Continue..." choice.
+                    Example Response: {"stateChanges":{"inventory":{"addItem":"Encrypted Research Notes"}},"choices":[{"text":"Run for the service door.","action":"Escape through the service door"},{"text":"Smash the window and jump.","action":"Escape through the window"}]}
+                `;
+                
+                const choicesJson = await getAiResponse(choicesPrompt);
+                const aiResponse = parseJsonResponse(choicesJson);
+
+                if (!aiResponse || !aiResponse.choices) {
+                    throw new Error("AI response was missing the 'choices' field.");
                 }
 
                 updateState(aiResponse.stateChanges);
-                renderNarrative(aiResponse.narrativeText);
                 renderChoices(aiResponse.choices);
 
             } catch (error) {
