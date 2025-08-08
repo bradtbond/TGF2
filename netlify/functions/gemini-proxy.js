@@ -1,28 +1,49 @@
-import GoogleGenerativeAI from "@google/genai";
-
-export async function handler(event) {
-    // Only allow POST requests
+// This function now uses the standard 'fetch' API and has no dependencies.
+exports.handler = async function(event) {
     if (event.httpMethod !== 'POST') {
         return { statusCode: 405, body: 'Method Not Allowed' };
     }
 
+    const { prompt } = JSON.parse(event.body);
+    if (!prompt) {
+        return { statusCode: 400, body: JSON.stringify({ error: "No prompt provided." }) };
+    }
+
+    // Your Gemini API Key is retrieved from the environment variables
+    const API_KEY = process.env.GEMINI_API_KEY;
+    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
+
+    // The data structure required by the Gemini REST API
+    const requestBody = {
+        contents: [{
+            parts: [{
+                text: prompt
+            }]
+        }]
+    };
+
     try {
-        // The API key is accessed from Netlify's environment variables
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const { prompt } = JSON.parse(event.body);
-        
-        if (!prompt) {
-             return { statusCode: 400, body: JSON.stringify({ error: "No prompt provided." }) };
+        const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.json();
+            console.error("Gemini API Error:", errorBody);
+            throw new Error(`Gemini API responded with status: ${response.status}`);
         }
 
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
+        const data = await response.json();
+        // We need to extract the text from the API's complex response structure
+        const generatedText = data.candidates[0].content.parts[0].text;
 
         return {
             statusCode: 200,
-            body: JSON.stringify({ text })
+            body: JSON.stringify({ text: generatedText })
         };
 
     } catch (error) {
