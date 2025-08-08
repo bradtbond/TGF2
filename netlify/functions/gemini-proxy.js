@@ -1,37 +1,37 @@
-// --- start of gemini-proxy.js code ---
-        import { GoogleGenerativeAI } from "@google/genai";
+// --- start of corrected gemini-proxy.js code ---
+const { GoogleGenerativeAI } = require("@google/genai");
 
-        export async function handler(event) {
-            // Only allow POST requests
-            if (event.httpMethod !== 'POST') {
-                return { statusCode: 405, body: 'Method Not Allowed' };
-            }
+exports.handler = async function(event) {
+    // Only allow POST requests
+    if (event.httpMethod !== 'POST') {
+        return { statusCode: 405, body: 'Method Not Allowed' };
+    }
 
-            try {
-                // The API key is accessed from Netlify's environment variables
-                const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-                const { prompt } = JSON.parse(event.body);
-                
-                if (!prompt) {
-                     return { statusCode: 400, body: JSON.stringify({ error: "No prompt provided." }) };
-                }
+    try {
+        // The API key is accessed from Netlify's environment variables
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        const { prompt } = JSON.parse(event.body);
 
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-                const result = await model.generateContent(prompt);
-                const response = await result.response;
-                const text = response.text();
-
-                return {
-                    statusCode: 200,
-                    body: JSON.stringify({ text })
-                };
-
-            } catch (error) {
-                console.error("Error in Netlify function:", error);
-                return {
-                    statusCode: 500,
-                    body: JSON.stringify({ error: "Internal Server Error in proxy function." })
-                };
-            }
+        if (!prompt) {
+             return { statusCode: 400, body: JSON.stringify({ error: "No prompt provided." }) };
         }
-        // --- end of gemini-proxy.js code ---
+
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const text = response.text();
+
+        return {
+            statusCode: 200,
+            body: JSON.stringify({ text })
+        };
+
+    } catch (error) {
+        console.error("Error in Netlify function:", error);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: "Internal Server Error in proxy function." })
+        };
+    }
+}
+// --- end of corrected gemini-proxy.js code ---
